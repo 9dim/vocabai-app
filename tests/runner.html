@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Browser Test Runner</title>
+  <style>
+    body { font-family: monospace; background: #0f172a; color: #f8fafc; padding: 20px; }
+    .pass { color: #10b981; }
+    .fail { color: #ef4444; }
+    #summary { margin-top: 20px; font-weight: bold; font-size: 1.2rem; }
+  </style>
+</head>
+<body>
+  <h1>🧪 Vocabulary PWA Automated In-Browser Test Suite</h1>
+  <div id="logs"></div>
+  <div id="summary">Running tests...</div>
+
+  <script type="module">
+    import { calculateSM2, getRevisionQueues, SM2_CONSTANTS } from '../js/sm2.js';
+    import { evaluateOfflineDefinition, estimateTokens } from '../js/gemini.js';
+    import {
+      generateAnkiCSV,
+      generateJSONBackup,
+      parseJSONBackup,
+      generateMarkdownExport
+    } from '../js/export.js';
+    import { calculateMetricsData } from '../js/metrics.js';
+    import { db } from '../js/db.js';
+    import { state } from '../js/state.js';
+
+    const logs = document.getElementById('logs');
+    const summary = document.getElementById('summary');
+
+    let total = 0;
+    let passed = 0;
+    let failed = 0;
+
+    function assert(condition, message) {
+      if (!condition) throw new Error(message || 'Assertion failed');
+    }
+    assert.strictEqual = (a, b, msg) => {
+      if (a !== b) throw new Error(`${msg || 'Assertion failed'}: expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
+    };
+    assert.ok = (a, msg) => {
+      if (!a) throw new Error(`${msg || 'Assertion failed'}: expected truthy value, got ${a}`);
+    };
+
+    async function runTest(name, fn) {
+      total++;
+      try {
+        await fn();
+        passed++;
+        const p = document.createElement('div');
+        p.className = 'pass';
+        p.textContent = `✅ PASS: ${name}`;
+        logs.appendChild(p);
+      } catch (err) {
+        failed++;
+        const p = document.createElement('div');
+        p.className = 'fail';
+        p.textContent = `❌ FAIL: ${name} -> ${err.message}`;
+        logs.appendChild(p);
+        console.error(name, err);
+      }
+    }
+
+    async function runAll() {
+      // 1. SM-2 tests
+      await runTest('SM-2 First review (interval 1)', () => {
+        const word = { repetitions: 0, interval: 0, easeFactor: 2.5, consecutiveFails: 0 };
+        const res = calculateSM2(word, 4);
+        assert.strictEqual(res.repetitions, 1);
+        assert.strictEqual(res.interval, 1);
+        assert.strictEqual(res.consecutiveFails, 0);
+      });
+
+      await runTest('SM-2 Second review (interval 6)', () => {
+        const word = { repetitions: 1, interval: 1, easeFactor: 2.5, consecutiveFails: 0 };
+        const res = calculateSM2(word, 5);
+        assert.strictEqual(res.repetitions, 2);
+        assert.strictEqual(res.interval, 6);
+      });
+
+      await runTest('SM-2 Third review scales by ease factor (15d)', () => {
+        const word = { repetitions: 2, interval: 6, easeFactor: 2.5, consecutiveFails: 0 };
+        const res = calculateSM2(word, 4);
+        assert.strictEqual(res.repetitions, 3);
+        assert.strictEqual(res.interval, 15);
+      });
+
+      await runTest('SM-2 Failure resets repetitions & increments consecutive fails', () => {
+        const word = { repetitions: 3, interval: 15, easeFactor: 2.5, consecutiveFails: 0 };
+        const res = calculateSM2(word, 2);
+        assert.strictEqual(res.repetitions, 0);
+        assert.strictEqual(res.interval, 1);
+        assert.strictEqual(res.consecutiveFails, 1);
+      });
+
+      await runTest('SM-2 Multi-failure penalty triggers 0.5d accelerated review', () => {
+        const word = { repetitions: 0, interval: 1, easeFactor: 2.3, consecutiveFails: 1 };
+        const res = calculateSM2(word, 1);
+        assert.strictEqual(res.consecutiveFails, 2);
+        assert.strictEqual(res.interval, 0.5);
+      });
+
+      await runTest('SM-2 Enforces minimum Ease Factor bound of 1.3', () => {
+        const word = { repetitions: 0, interval: 1, easeFactor: 1.35, consecutiveFails: 5 };
+        const res = calculateSM2(word, 0);
+        assert.strictEqual(res.easeFactor, 1.3);
+      });
+
+      // 2. Queue tests
+      await runTest('Revision Queues categorization (Due, Struggling, Dormant)', () => {
+        const now = Date.now();
+        const ONE_DAY = 24 * 60 * 60 * 1000;
+        const mockWords = [
+          { id: '1', word: 'DueWord', dueDate: now - 1000, consecutiveFails: 0 },
+          { id: '2', word: 'FutureWord', dueDate: now + ONE_DAY * 5, consecutiveFails: 0 },
+          { id: '3', word: 'LeechWord', dueDate: now + 5000, consecutiveFails: 3, easeFactor: 1.3 },
+          { id: '4', word: 'DormantWord', lastReviewed: now - ONE_DAY * 35, interval: 35, dueDate: now + ONE_DAY * 10 }
+        ];
+        const queues = getRevisionQueues(mockWords);
+        assert.strictEqual(queues.dueToday.length, 1);
+        assert.strictEqual(queues.struggling.length, 1);
+        assert.strictEqual(queues.dormant.length, 1);
+      });
+
+      // 3. Offline Heuristic tests
+      await runTest('Phase 1 Offline accuracy check matches keywords', () => {
+        const wordItem = {
+          word: 'Ephemeral',
+          definition: 'Lasting for a very short time; transitory.',
+          keywords: ['short time', 'fleeting', 'transitory']
+        };
+        const res = evaluateOfflineDefinition('Something that is fleeting and for a short time', wordItem);
+        assert.ok(res.quality >= 4, `Quality was ${res.quality}`);
+        assert.ok(res.matchedKeywords.length >= 2);
+      });
+
+      // 4. Token tracker test
+      await runTest('Token estimator computes ~4 chars per token', () => {
+        const str = '1234567890123456';
+        assert.strictEqual(estimateTokens(str), 4);
+      });
+
+      // 5. Data portability
+      await runTest('Anki CSV and JSON backup export/restore', () => {
+        const words = [{ word: 'Pragmatic', definition: 'Sensible', partOfSpeech: 'adj' }];
+        const csv = generateAnkiCSV(words);
+        assert.ok(csv.includes('"Pragmatic"'));
+
+        const backup = generateJSONBackup({ words });
+        const parsed = parseJSONBackup(backup);
+        assert.strictEqual(parsed.words.length, 1);
+        assert.strictEqual(parsed.words[0].word, 'Pragmatic');
+      });
+
+      // 6. IndexedDB Real Database Tests
+      await runTest('IndexedDB CRUD & Bulk Word operations', async () => {
+        await db.open();
+        await db.clearAllWords();
+
+        const testWord = { id: 'test_1', word: 'Resilient', definition: 'Able to recover quickly' };
+        await db.putWord(testWord);
+
+        const fetched = await db.getWord('test_1');
+        assert.strictEqual(fetched.word, 'Resilient');
+
+        const bulkWords = [
+          { id: 'test_2', word: 'Ubiquitous', definition: 'Everywhere' },
+          { id: 'test_3', word: 'Serendipity', definition: 'Happy accident' }
+        ];
+        await db.putWordsBulk(bulkWords);
+
+        const all = await db.getAllWords();
+        assert.strictEqual(all.length, 3);
+
+        await db.deleteWord('test_1');
+        const afterDelete = await db.getAllWords();
+        assert.strictEqual(afterDelete.length, 2);
+      });
+
+      // 7. State Store In-memory and Review Grade
+      await runTest('State store handles review grades & updates metrics', async () => {
+        await state.init();
+        await state.addWord({ word: 'Eloquent', definition: 'Fluent in speaking' });
+
+        const w = state.words.find(item => item.word === 'Eloquent');
+        assert.ok(w, 'Word was added to state');
+
+        await state.applyReviewGrade(w.id, 5, { source: 'test', feedback: 'Great' });
+        const updated = state.words.find(item => item.word === 'Eloquent');
+        assert.strictEqual(updated.repetitions, 1);
+        assert.strictEqual(updated.interval, 1);
+        assert.strictEqual(state.metrics.reviewCount >= 1, true);
+      });
+
+      // 8. Full Backup & Restore Integration Test
+      await runTest('Full backup and restore preserves SM-2 state and metrics', async () => {
+        // Prepare mock backup with word having SM-2 progression
+        const backupData = {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          words: [
+            {
+              id: 'restored_1',
+              word: 'Tenacious',
+              definition: 'Tending to keep a firm hold',
+              repetitions: 4,
+              interval: 22,
+              easeFactor: 2.6,
+              consecutiveFails: 0,
+              dueDate: Date.now() + 86400000,
+              history: [{ timestamp: Date.now() - 86400000, quality: 5, interval: 22, easeFactor: 2.6 }]
+            }
+          ],
+          metrics: {
+            streak: 7,
+            totalTokens: 1500,
+            reviewCount: 42,
+            correctReviewCount: 39
+          },
+          pendingReviews: [
+            { id: 'prev_1', wordId: 'restored_1', word: 'Tenacious', userAnswer: 'holds on firmly' }
+          ]
+        };
+
+        const restoreRes = await state.restoreFromBackup(backupData);
+        assert.strictEqual(restoreRes.wordsCount, 1);
+        assert.strictEqual(state.words[0].word, 'Tenacious');
+        assert.strictEqual(state.words[0].repetitions, 4);
+        assert.strictEqual(state.words[0].interval, 22);
+        assert.strictEqual(state.metrics.streak, 7);
+        assert.strictEqual(state.metrics.reviewCount, 42);
+        assert.strictEqual(state.pendingReviews.length, 1);
+
+        // Verify persisted in real IndexedDB
+        const dbWords = await db.getAllWords();
+        assert.strictEqual(dbWords.length, 1);
+        assert.strictEqual(dbWords[0].repetitions, 4);
+        assert.strictEqual(dbWords[0].interval, 22);
+
+        const dbPending = await db.getPendingReviews();
+        assert.strictEqual(dbPending.length, 1);
+
+        const dbStreak = await db.getMetric('streak');
+        assert.strictEqual(dbStreak, 7);
+      });
+
+      // 9. Model candidate list and fallback ordering
+      await runTest('Model candidates fallback ordering & priority', async () => {
+        const client = state.gemini;
+        client.setActiveModel('custom-test-model');
+        const list = await client.getCandidateModelsToTry();
+        assert.ok(list.length >= 3, 'Should have multiple candidate fallback models');
+        assert.strictEqual(list[0], 'custom-test-model', 'Active model should be prioritized first');
+        assert.ok(list.includes('gemini-1.5-flash'), 'Should include gemini-1.5-flash in fallbacks');
+      });
+
+      // 10. Custom AI Prompts & Schemas configuration & persistence
+      await runTest('Custom Prompts & Schema configuration and reset', async () => {
+        const customDef = 'Custom prompt with {{WORDS_JSON}} for testing.';
+        const customEval = 'Custom eval with {{REVIEWS_JSON}} for testing.';
+        
+        await state.setCustomPrompts({
+          definitionPrompt: customDef,
+          evaluationPrompt: customEval
+        });
+
+        const active = state.gemini.getCustomPrompts();
+        assert.strictEqual(active.definitionPrompt, customDef);
+        assert.strictEqual(active.evaluationPrompt, customEval);
+
+        // Verify persisted to IndexedDB
+        const stored = await db.getMetric('customPrompts');
+        assert.ok(stored, 'customPrompts should be stored in IndexedDB metrics');
+        assert.strictEqual(stored.definitionPrompt, customDef);
+
+        // Verify reset
+        await state.resetCustomPrompts();
+        const resetActive = state.gemini.getCustomPrompts();
+        assert.ok(resetActive.definitionPrompt.includes('expert polymath'));
+        assert.ok(resetActive.evaluationPrompt.includes('vocabulary tutor'));
+
+        const storedAfterReset = await db.getMetric('customPrompts');
+        assert.strictEqual(storedAfterReset.definitionPrompt, resetActive.definitionPrompt);
+      });
+
+      summary.textContent = `RESULT: ${passed} / ${total} passed (${failed} failed)`;
+      summary.style.color = failed === 0 ? '#10b981' : '#ef4444';
+
+      // Signal completion to automation
+      window.__TEST_RESULTS__ = { total, passed, failed };
+    }
+
+    runAll();
+  </script>
+</body>
+</html>

@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0b0f19">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Offline-first vocabulary builder with native speech dictation & spaced repetition">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./style.css">
+  <title>Vocab AI - Offline Spaced Repetition</title>
+</head>
+<body>
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-icon">📖</span>
+      <h1>Vocab AI</h1>
+    </div>
+    <div class="header-status">
+      <div id="streak-badge-container" class="streak-badge">
+        <span>🔥</span> <span id="streak-count">0</span>d
+      </div>
+      <button id="btn-pwa-install" class="btn btn-sm btn-primary" style="display: none; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: 600;" title="Install App on Phone">
+        📲 Install
+      </button>
+      <button id="btn-theme-toggle" class="btn btn-sm btn-secondary" style="padding: 4px 8px; border-radius: 20px; font-size: 1rem; cursor: pointer;" title="Toggle Day / Night Mode">
+        🌙
+      </button>
+      <div class="sync-badge">
+        <span id="sync-indicator" class="sync-indicator" title="Storage Ready"></span>
+        <span id="sync-status-text">Ready</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Top/Bottom Navigation (Switches view on mobile & desktop) -->
+  <nav class="bottom-nav" aria-label="Main Navigation">
+    <button class="nav-item active" data-view="revision-view">
+      <span class="nav-icon">🧠</span>
+      <span>Review</span>
+    </button>
+    <button class="nav-item" data-view="add-view">
+      <span class="nav-icon">➕</span>
+      <span>Add</span>
+    </button>
+    <button class="nav-item" data-view="library-view">
+      <span class="nav-icon">📚</span>
+      <span>Library</span>
+    </button>
+    <button class="nav-item" data-view="metrics-view">
+      <span class="nav-icon">📊</span>
+      <span>Metrics</span>
+    </button>
+    <button class="nav-item" data-view="settings-view">
+      <span class="nav-icon">⚙️</span>
+      <span>Settings</span>
+    </button>
+  </nav>
+
+  <!-- Main View Container -->
+  <main class="container">
+
+    <!-- 1. REVISION VIEW -->
+    <section id="revision-view" class="view-section active">
+      <!-- Queue Filter Chips -->
+      <div class="study-filter-bar">
+        <button class="filter-chip active" data-filter="dueToday">Due Today (<span id="count-dueToday">0</span>)</button>
+        <button class="filter-chip" data-filter="struggling">Struggling (<span id="count-struggling">0</span>)</button>
+        <button class="filter-chip" data-filter="dormant">Dormant (<span id="count-dormant">0</span>)</button>
+        <button class="filter-chip" data-filter="all">All Words (<span id="count-all">0</span>)</button>
+      </div>
+
+      <!-- Revision Study Flashcard -->
+      <div id="study-container">
+        <!-- Rendered dynamically by app.js -->
+      </div>
+
+      <!-- Pending Reviews AI Sync Bar -->
+      <div id="pending-reviews-bar" class="card" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong>AI Sync Ready</strong>
+            <p style="font-size: 0.85rem; color: var(--text-secondary);">
+              <span id="pending-count">0</span> review(s) queued for Gemini batch evaluation.
+            </p>
+          </div>
+          <button id="btn-sync-ai-eval" class="btn btn-primary btn-sm">Batch Evaluate (AI)</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. ADD WORDS VIEW -->
+    <section id="add-view" class="view-section">
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="single-add-panel">Single Word</button>
+        <button class="tab-btn" data-tab="batch-add-panel">Bulk / Batch Add (Unlimited)</button>
+      </div>
+
+      <!-- Single Word Panel -->
+      <div id="single-add-panel" class="tab-panel">
+        <div class="card">
+          <h2 class="card-title">Add Word to Vocabulary</h2>
+          <form id="form-single-word">
+            <div class="form-group">
+              <label for="input-single-word">Word *</label>
+              <input type="text" id="input-single-word" placeholder="e.g. Ephemeral" required autocomplete="off">
+            </div>
+
+            <div class="form-group" style="display: flex; gap: 8px;">
+              <button type="button" id="btn-ai-define-single" class="btn btn-secondary btn-sm" style="flex: 1;">
+                ✨ Fetch Definition via AI
+              </button>
+            </div>
+
+            <div class="form-group">
+              <label for="input-single-pos">Part of Speech</label>
+              <input type="text" id="input-single-pos" placeholder="e.g. adjective">
+            </div>
+
+            <div class="form-group">
+              <label for="input-single-def">Definition</label>
+              <textarea id="input-single-def" placeholder="Lasting for a very short time..."></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="input-single-example">Example Sentence</label>
+              <textarea id="input-single-example" placeholder="Fashions are ephemeral, changing with every season."></textarea>
+            </div>
+
+            <div class="form-group">
+              <label for="input-single-synonyms">Synonyms (comma-separated)</label>
+              <input type="text" id="input-single-synonyms" placeholder="transient, fleeting, brief">
+            </div>
+
+            <div class="form-group">
+              <label for="input-single-keywords">Keywords for recall scoring (comma-separated)</label>
+              <input type="text" id="input-single-keywords" placeholder="short time, temporary, fleeting">
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-full">Save Word</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Batch Add Panel -->
+      <div id="batch-add-panel" class="tab-panel" style="display: none;">
+        <div class="card">
+          <h2 class="card-title">Bulk Add Words (with Gemini AI)</h2>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">
+            Enter as many words as you want (one per line or comma-separated). Gemini will automatically fetch definitions, examples, and synonyms in efficient batches with progress tracking.
+          </p>
+          <form id="form-batch-words">
+            <div class="form-group">
+              <label for="input-batch-text">Words List (Unlimited)</label>
+              <textarea id="input-batch-text" rows="8" placeholder="Serendipity&#10;Ubiquitous&#10;Melancholy&#10;Pragmatic&#10;Resilient&#10;Tenacious&#10;Ineffable&#10;Eloquent&#10;Lucid&#10;Sycophant&#10;Cacophony..." required></textarea>
+            </div>
+            <button type="submit" id="btn-batch-submit" class="btn btn-primary btn-full">
+              ✨ Generate & Save All Words
+            </button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. LIBRARY VIEW -->
+    <section id="library-view" class="view-section">
+      <div class="card">
+        <div class="card-title">
+          <span>Vocabulary Notebook (<span id="library-total-count">0</span>)</span>
+          <div class="btn-group">
+            <button id="btn-copy-markdown" class="btn btn-secondary btn-sm" title="Copy as Markdown">📋 Copy MD</button>
+            <button id="btn-export-anki" class="btn btn-secondary btn-sm" title="Export Anki CSV">📤 Anki CSV</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <input type="text" id="search-library" placeholder="Search words, definitions, or tags...">
+        </div>
+        <div id="library-list-container">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. METRICS VIEW -->
+    <section id="metrics-view" class="view-section">
+      <!-- Stat summary tiles -->
+      <div class="metrics-summary-grid">
+        <div class="stat-box">
+          <div id="metric-streak" class="stat-number">0</div>
+          <div class="stat-label">Daily Streak (Days)</div>
+        </div>
+        <div class="stat-box">
+          <div id="metric-total-words" class="stat-number">0</div>
+          <div class="stat-label">Total Words</div>
+        </div>
+        <div class="stat-box">
+          <div id="metric-retention" class="stat-number">100%</div>
+          <div class="stat-label">Retention Rate</div>
+        </div>
+        <div class="stat-box">
+          <div id="metric-avg-interval" class="stat-number">0</div>
+          <div class="stat-label">Avg Interval (Days)</div>
+        </div>
+      </div>
+
+      <!-- Mastery Donut Chart Card -->
+      <div class="card">
+        <h2 class="card-title">Word Mastery Breakdown</h2>
+        <div class="chart-container">
+          <canvas id="chart-mastery" class="chart-canvas"></canvas>
+        </div>
+        <div style="display: flex; justify-content: center; gap: 12px; margin-top: 10px; font-size: 0.8rem;">
+          <span style="color: #94a3b8">● New</span>
+          <span style="color: #f59e0b">● Learning</span>
+          <span style="color: #3b82f6">● Reviewing</span>
+          <span style="color: #10b981">● Mastered</span>
+        </div>
+      </div>
+
+      <!-- Quality Grade Distribution Bar Chart -->
+      <div class="card">
+        <h2 class="card-title">Review Quality Distribution (SM-2)</h2>
+        <div class="chart-container">
+          <canvas id="chart-scores" class="chart-canvas"></canvas>
+        </div>
+      </div>
+
+      <!-- Gemini Token Usage Card -->
+      <div class="card">
+        <h2 class="card-title">Gemini AI Token & Cost Tracker</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 0.9rem;">
+          <div>Input Tokens: <strong id="token-input">0</strong></div>
+          <div>Output Tokens: <strong id="token-output">0</strong></div>
+          <div>Total Tokens: <strong id="token-total">0</strong></div>
+          <div>Estimated Cost: <strong id="token-cost">$0.0000</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. SETTINGS & BACKUP VIEW -->
+    <section id="settings-view" class="view-section">
+      <!-- Appearance & Theme Settings -->
+      <div class="card">
+        <h2 class="card-title">Appearance & Theme</h2>
+        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">
+          Choose your visual appearance. You can also quickly toggle day/night mode using the button in the top navigation bar.
+        </p>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <button type="button" id="btn-theme-day" class="btn btn-secondary" style="flex: 1; padding: 10px;">
+            ☀️ Day Mode (Clean White)
+          </button>
+          <button type="button" id="btn-theme-night" class="btn btn-secondary" style="flex: 1; padding: 10px;">
+            🌙 Night Mode (Midnight Slate)
+          </button>
+        </div>
+      </div>
+
+      <!-- Gemini API Key & Model Configuration -->
+      <div class="card">
+        <h2 class="card-title">Gemini API Settings</h2>
+        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">
+          Configure your Google Gemini API key to enable batch definition fetching and AI evaluation. Key is stored strictly in your local device IndexedDB. The app automatically discovers supported models and tries fallback models if any fail.
+        </p>
+        <form id="form-api-key">
+          <div class="form-group">
+            <label for="input-api-key">Gemini API Key</label>
+            <input type="password" id="input-api-key" placeholder="AIzaSy..." autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label for="select-gemini-model">Preferred Model</label>
+            <div style="display: flex; gap: 8px;">
+              <select id="select-gemini-model" style="flex: 1; padding: 10px; border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-color);">
+                <option value="">Auto-Detect / Multi-Model Fallback</option>
+                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                <option value="gemini-1.5-flash-latest">gemini-1.5-flash-latest</option>
+                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+              </select>
+              <button type="button" id="btn-discover-models" class="btn btn-secondary" style="white-space: nowrap;">🔍 Check Models</button>
+            </div>
+            <div id="models-status-msg" style="font-size: 0.8rem; margin-top: 6px; color: var(--text-secondary);"></div>
+          </div>
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+        </form>
+      </div>
+
+      <!-- AI Prompts & Schema Customization -->
+      <div class="card">
+        <div class="card-title" style="margin-bottom: 8px;">
+          <span>Custom AI Prompts & Schemas</span>
+        </div>
+        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 14px;">
+          Customize the system prompts and JSON schemas used for definition generation and revision evaluation. Use <code style="color: var(--primary-color);">{{WORDS_JSON}}</code> in the definition template and <code style="color: var(--primary-color);">{{REVIEWS_JSON}}</code> in the evaluation template.
+        </p>
+        <form id="form-custom-prompts">
+          <div class="form-group">
+            <label for="prompt-definition-template">
+              Definition Generation Prompt & Schema
+              <span style="font-size: 0.75rem; color: var(--text-secondary); font-weight: normal;">(must include {{WORDS_JSON}})</span>
+            </label>
+            <textarea id="prompt-definition-template" rows="9" style="font-family: monospace; font-size: 0.82rem; line-height: 1.4; resize: vertical;"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="prompt-evaluation-template">
+              Review & Intent Evaluation Prompt & Schema
+              <span style="font-size: 0.75rem; color: var(--text-secondary); font-weight: normal;">(must include {{REVIEWS_JSON}})</span>
+            </label>
+            <textarea id="prompt-evaluation-template" rows="9" style="font-family: monospace; font-size: 0.82rem; line-height: 1.4; resize: vertical;"></textarea>
+          </div>
+
+          <div class="btn-group">
+            <button type="submit" class="btn btn-primary">💾 Save Custom Prompts</button>
+            <button type="button" id="btn-reset-prompts" class="btn btn-secondary">🔄 Reset to Defaults</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Backup & Restore -->
+      <div class="card">
+        <h2 class="card-title">Backup & Portability</h2>
+        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 14px;">
+          100% offline data portability. Export complete JSON backups or restore previous databases.
+        </p>
+        <div class="btn-group">
+          <button id="btn-export-json" class="btn btn-secondary">💾 Export JSON Backup</button>
+          <label class="btn btn-secondary" style="margin: 0; cursor: pointer;">
+            📥 Restore JSON
+            <input type="file" id="file-restore-json" accept=".json" style="display: none;">
+          </label>
+          <button id="btn-copy-json" class="btn btn-secondary">📋 Copy JSON to Clipboard</button>
+        </div>
+      </div>
+
+      <!-- App Info -->
+      <div class="card" style="font-size: 0.85rem; color: var(--text-secondary);">
+        <h2 class="card-title">About Vocab AI</h2>
+        <p>• Zero SDK, standalone offline PWA.</p>
+        <p>• Native Android dictation hook (`webkitSpeechRecognition`).</p>
+        <p>• SuperMemo SM-2 Spaced Repetition with multi-fail repeat penalties.</p>
+        <p>• 2-Phase hybrid evaluation (offline heuristic + batch AI evaluation).</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Non-blocking Toast Container -->
+  <div id="toast-container" aria-live="polite"></div>
+
+  <!-- Main ES6 Application Entrypoint -->
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
